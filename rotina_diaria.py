@@ -1,68 +1,68 @@
 import streamlit as st
-import sqlite3
-from datetime import datetime, timedelta
 import pandas as pd
+from datetime import datetime, timedelta
 import plotly.express as px
+import os
 
-def init_db():
-    conn = sqlite3.connect('daily_planner.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id INTEGER PRIMARY KEY,
-                  date TEXT,
-                  scheduled_time TEXT,
-                  description TEXT,
-                  priority TEXT,
-                  status TEXT,
-                  category TEXT)''')
-    conn.commit()
-    conn.close()
+TASKS_FILE = "tasks.csv"
+
+def init_csv():
+    if not os.path.exists(TASKS_FILE):
+        df = pd.DataFrame(columns=[
+            'id', 'date', 'scheduled_time', 'description', 
+            'priority', 'status', 'category'
+        ])
+        df.to_csv(TASKS_FILE, index=False)
+
+def get_next_id():
+    df = pd.read_csv(TASKS_FILE)
+    return 1 if df.empty else df['id'].max() + 1
 
 def add_task(date, scheduled_time, description, priority, category, status="Pendente"):
-    conn = sqlite3.connect('daily_planner.db')
-    c = conn.cursor()
-    c.execute('''INSERT INTO tasks (date, scheduled_time, description, priority, status, category)
-                 VALUES (?, ?, ?, ?, ?, ?)''',
-              (date, scheduled_time, description, priority, status, category))
-    conn.commit()
-    conn.close()
+    df = pd.read_csv(TASKS_FILE)
+    new_task = pd.DataFrame([{
+        'id': get_next_id(),
+        'date': date,
+        'scheduled_time': scheduled_time,
+        'description': description,
+        'priority': priority,
+        'status': status,
+        'category': category
+    }])
+    df = pd.concat([df, new_task], ignore_index=True)
+    df.to_csv(TASKS_FILE, index=False)
+
+def get_tasks(date=None):
+    df = pd.read_csv(TASKS_FILE)
+    if date and not df.empty:
+        df = df[df['date'] == date]
+        df = df.sort_values('scheduled_time')
+    return df
 
 def delete_task(task_id):
-    conn = sqlite3.connect('daily_planner.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    conn.commit()
-    conn.close()
+    df = pd.read_csv(TASKS_FILE)
+    df = df[df['id'] != task_id]
+    df.to_csv(TASKS_FILE, index=False)
+
+def update_task_status(task_id, new_status):
+    df = pd.read_csv(TASKS_FILE)
+    df.loc[df['id'] == task_id, 'status'] = new_status
+    df.to_csv(TASKS_FILE, index=False)
 
 def get_weekly_stats():
     end_date = datetime.now()
     start_date = end_date - timedelta(days=7)
     
-    conn = sqlite3.connect('daily_planner.db')
-    query = """
-    SELECT date, status, COUNT(*) as count 
-    FROM tasks 
-    WHERE date BETWEEN ? AND ?
-    GROUP BY date, status
-    """
-    df = pd.read_sql_query(query, conn, params=(start_date.strftime("%Y-%m-%d"), 
-                                               end_date.strftime("%Y-%m-%d")))
-    conn.close()
-    return df
-
-def get_tasks(date=None):
-    conn = sqlite3.connect('daily_planner.db')
-    if date:
-        query = "SELECT * FROM tasks WHERE date = ? ORDER BY scheduled_time"
-        df = pd.read_sql_query(query, conn, params=(date,))
-    else:
-        df = pd.read_sql_query("SELECT * FROM tasks ORDER BY date, scheduled_time", conn)
-    conn.close()
-    return df
+    df = pd.read_csv(TASKS_FILE)
+    if not df.empty:
+        mask = (pd.to_datetime(df['date']) >= start_date.strftime("%Y-%m-%d")) & \
+               (pd.to_datetime(df['date']) <= end_date.strftime("%Y-%m-%d"))
+        return df[mask].groupby(['date', 'status']).size().reset_index(name='count')
+    return pd.DataFrame()
 
 def main():
     st.title("Planejamento Diário")
-    init_db()
+    init_csv()
 
     st.sidebar.header("Menu")
     page = st.sidebar.selectbox("Escolha uma opção", 
@@ -122,8 +122,8 @@ def main():
                          title='Progresso Semanal')
             st.plotly_chart(fig)
             
-            st.metric("Total de Tarefas Concluídas", 
-                     len(weekly_stats[weekly_stats['status'] == 'Concluída']))
+            completed_tasks = weekly_stats[weekly_stats['status'] == 'Concluída']['count'].sum()
+            st.metric("Total de Tarefas Concluídas", completed_tasks)
         else:
             st.warning("Sem tarefas registradas para a última semana")
 
@@ -142,12 +142,17 @@ def main():
                     st.write(f"Prioridade: {task['priority']} | Categoria: {task['category']}")
                 
                 with col2:
-                    status = st.selectbox(
+                    current_status = task['status']
+                    new_status = st.selectbox(
                         "Status",
                         ["Pendente", "Em Andamento", "Concluída"],
-                        index=["Pendente", "Em Andamento", "Concluída"].index(task['status']),
+                        index=["Pendente", "Em Andamento", "Concluída"].index(current_status),
                         key=f"status_{task['id']}"
                     )
+                    
+                    if new_status != current_status:
+                        update_task_status(task['id'], new_status)
+                        st.experimental_rerun()
                 
                 with col3:
                     if task['status'] != "Pendente":
