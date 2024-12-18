@@ -60,9 +60,18 @@ def get_weekly_stats():
         return df[mask].groupby(['date', 'status']).size().reset_index(name='count')
     return pd.DataFrame()
 
+def update_time(time_str):
+    try:
+        return datetime.strptime(time_str, "%H:%M").time()
+    except:
+        return datetime.now().time()
+
 def main():
     st.title("Planejamento Diário")
     init_csv()
+    
+    if 'scheduled_time' not in st.session_state:
+        st.session_state.scheduled_time = datetime.now().time()
 
     st.sidebar.header("Menu")
     page = st.sidebar.selectbox("Escolha uma opção", 
@@ -75,7 +84,12 @@ def main():
         with col1:
             date = st.date_input("Data", datetime.now())
         with col2:
-            scheduled_time = st.time_input("Horário Planejado", datetime.now().time())
+            scheduled_time = st.time_input(
+                "Horário Planejado",
+                st.session_state.scheduled_time,
+                key="time_input"
+            )
+            st.session_state.scheduled_time = scheduled_time
             
         description = st.text_area("Descrição da Tarefa")
         priority = st.selectbox("Prioridade", ["Alta", "Média", "Baixa"])
